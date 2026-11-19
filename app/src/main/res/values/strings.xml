@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Mi Teclado</string>
+    <string name="descripcion">Teclado flotante de una sola fila. Lo usa para escribir texto en el campo que tengas seleccionado en cualquier app.</string>
+</resources>
