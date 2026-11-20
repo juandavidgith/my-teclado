@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -27,11 +28,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/** Teclado flotante de una sola fila (barra deslizable) que escribe en el campo enfocado. */
 public class MiTeclado extends AccessibilityService {
     static final String SHIFT = "\u21e7", BORRAR = "\u232b", ENTER = "\u21b5";
     static final String LETRAS = "abcdefghijklmn\u00f1opqrstuvwxyz";
     static final String RESTO = "0123456789.,?!@-_/:;()";
+    static final String[] ENVIAR = {"Enviar", "Send", "Comentar", "Comment", "Publicar", "Post"};
 
     WindowManager wm;
     FrameLayout raiz;
@@ -65,7 +66,9 @@ public class MiTeclado extends AccessibilityService {
         burbuja.setTextColor(Color.WHITE);
         burbuja.setTextSize(16);
         burbuja.setGravity(Gravity.CENTER);
-        burbuja.setBackground(fondo(0xF01A73E8, 24));
+        GradientDrawable negro = fondo(0xF0000000, 24);
+        negro.setStroke(px(1), 0xFF5F6368);
+        burbuja.setBackground(negro);
         burbuja.setVisibility(View.GONE);
         raiz.addView(burbuja, new FrameLayout.LayoutParams(px(48), px(48)));
         arrastrar(burbuja, () -> minimizar(false));
@@ -111,10 +114,10 @@ public class MiTeclado extends AccessibilityService {
         teclasLetra.clear();
         barra.setPadding(px(3), px(3), px(3), px(3));
 
-        TextView asa = celda("\u2261", 30, null);          // arrastrar para mover
+        TextView asa = celda("\u2261", 28, null);          // arrastrar para mover
         arrastrar(asa, null);
         barra.addView(asa);
-        barra.addView(celda("\u2013", 30, () -> minimizar(true)));   // minimizar
+        barra.addView(celda("\u2013", 28, () -> minimizar(true)));   // minimizar
 
         HorizontalScrollView sv = new HorizontalScrollView(this);
         sv.setHorizontalScrollBarEnabled(false);
@@ -138,11 +141,12 @@ public class MiTeclado extends AccessibilityService {
         fila.addView(celda(ENTER, 40, this::enter));
         fila.addView(celda("A\u2212", 34, () -> cambiarTamano(-0.15f)));
         fila.addView(celda("A+", 34, () -> cambiarTamano(0.15f)));
+        fila.addView(celda("\uD83C\uDF19", 40, this::modoOscuro));   // luna: modo oscuro
         sv.addView(fila);
         barra.addView(sv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        barra.addView(celda("Esp", 42, () -> escribir(" ")));
-        TextView del = celda(BORRAR, 36, null);
+        barra.addView(celda("Esp", 38, () -> escribir(" ")));
+        TextView del = celda(BORRAR, 34, null);
         del.setOnTouchListener((w, e) -> {
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
@@ -159,6 +163,10 @@ public class MiTeclado extends AccessibilityService {
             return true;
         });
         barra.addView(del);
+
+        TextView env = celda("Enviar", 52, this::enviar);   // boton azul fijo
+        env.setBackground(fondo(0xFF1A73E8, 8));
+        barra.addView(env);
         actualizarMayus();
     }
 
@@ -166,7 +174,8 @@ public class MiTeclado extends AccessibilityService {
         TextView v = new TextView(this);
         v.setText(texto);
         v.setTextColor(Color.WHITE);
-        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, (texto.length() > 1 ? 13 : 18) * escala);
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP,
+                (texto.codePointCount(0, texto.length()) > 1 ? 13 : 18) * escala);
         v.setGravity(Gravity.CENTER);
         v.setBackground(fondo(0xFF3C4043, 8));
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(px(anchoDp * escala), px(40 * escala));
@@ -301,6 +310,7 @@ public class MiTeclado extends AccessibilityService {
         poner(n, t.substring(0, a) + t.substring(b), a);
     }
 
+    /** Enter normal: salto de linea en campos grandes, o la accion del teclado en campos de una linea. */
     private void enter() {
         AccessibilityNodeInfo n = campo();
         if (n == null) return;
@@ -309,9 +319,45 @@ public class MiTeclado extends AccessibilityService {
             n.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
     }
 
+    private boolean esBotonEnviar(AccessibilityNodeInfo n) {
+        String d = n.getContentDescription() == null ? "" : n.getContentDescription().toString().trim();
+        String t = n.getText() == null ? "" : n.getText().toString().trim();
+        for (String p : ENVIAR) if (p.equalsIgnoreCase(d) || p.equalsIgnoreCase(t)) return true;
+        return false;
+    }
+
+    /** Busca en pantalla el boton Enviar (WhatsApp, etc.) y lo toca; si no lo encuentra, hace Enter. */
+    private void enviar() {
+        AccessibilityNodeInfo r = getRootInActiveWindow();
+        if (r != null) {
+            for (String palabra : ENVIAR) {
+                List<AccessibilityNodeInfo> lista = r.findAccessibilityNodeInfosByText(palabra);
+                if (lista == null) continue;
+                for (AccessibilityNodeInfo n : lista) {
+                    if (!esBotonEnviar(n)) continue;
+                    AccessibilityNodeInfo c = n;
+                    while (c != null && !c.isClickable()) c = c.getParent();
+                    if (c != null && c.isEnabled() && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return;
+                }
+            }
+        }
+        enter();
+    }
+
+    /** Android no deja a una app cambiar el modo oscuro sola: abre la pantalla de ajustes donde se cambia. */
+    private void modoOscuro() {
+        try {
+            Intent i = new Intent(Settings.ACTION_DISPLAY_SETTINGS);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
+        }
+    }
+
     // ---------- Utilidades ----------
     private int ancho() {
-        return Math.min(px(330 * escala), getResources().getDisplayMetrics().widthPixels - px(8));
+        return Math.min(px(360 * escala), getResources().getDisplayMetrics().widthPixels - px(8));
     }
 
     private int px(float dp) {
